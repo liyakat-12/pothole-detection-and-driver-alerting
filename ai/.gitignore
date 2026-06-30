@@ -1,0 +1,53 @@
+# ============================================================
+# AI / model training — .gitignore
+# ============================================================
+
+# ----- Dataset (DO NOT upload — large) -----
+dataset_rdd/
+datasets/
+data/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# YOLO dataset label caches
+*.cache
+
+# ----- Base / pretrained weights (auto-downloaded, no need to commit) -----
+yolov8s.pt
+yolov8n.pt
+yolo11n.pt
+yolov8m.pt
+yolov8l.pt
+yolov8x.pt
+
+# ----- Training / prediction runs -----
+# Keep ONLY the trained weights the website needs (train2/weights/best.pt);
+# ignore everything else under runs/ (sample videos, predict outputs, training
+# batches, optimizer checkpoints, plots).
+runs/**
+!runs/
+!runs/detect/
+!runs/detect/train2/
+!runs/detect/train2/weights/
+!runs/detect/train2/weights/best.pt
+wandb/
+
+# ----- Sample media -----
+*.avi
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+tempCodeRunnerFile.py
+
+# ----- OS -----
+.DS_Store
+Thumbs.db

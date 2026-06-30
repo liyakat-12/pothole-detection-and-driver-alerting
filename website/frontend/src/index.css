@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@keyframes indeterminate {
+    0% { margin-left: -35%; }
+    100% { margin-left: 100%; }
+}
+
+@keyframes floaty {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+}
+
+:root {
+    color-scheme: dark;
+}
+
+html, body, #root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: #e7e5e4;
+    background-color: #0f130d;
+    background-image:
+        radial-gradient(900px circle at 10% -10%, rgba(98, 129, 65, 0.18), transparent 45%),
+        radial-gradient(800px circle at 100% 0%, rgba(217, 140, 43, 0.10), transparent 40%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbars */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #44503c #14180f;
+}
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+::-webkit-scrollbar-track {
+    background: #14180f;
+}
+::-webkit-scrollbar-thumb {
+    background: #3a4533;
+    border-radius: 8px;
+    border: 2px solid #14180f;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #4f6a34;
+}
+
+/* Headings a touch tighter for a more polished look */
+h1, h2, h3 {
+    letter-spacing: -0.02em;
+}
+
+/* Dark theme for Leaflet popups & controls */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+    background: #1b211a !important;
+    color: #e7e5e4 !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+.leaflet-popup-content {
+    margin: 10px 12px !important;
+    font-family: 'Inter', sans-serif !important;
+}
+.leaflet-container a.leaflet-popup-close-button {
+    color: #a3a3a3 !important;
+}
+.leaflet-bar a {
+    background: #1b211a !important;
+    color: #e7e5e4 !important;
+    border-color: #2c352a !important;
+}
+.leaflet-bar a:hover {
+    background: #2c352a !important;
+}
+.leaflet-control-attribution {
+    background: rgba(20, 24, 15, 0.7) !important;
+    color: #8a8a8a !important;
+}
+.leaflet-control-attribution a {
+    color: #8bae66 !important;
+}
