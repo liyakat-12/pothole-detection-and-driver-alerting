@@ -41,6 +41,7 @@ export default function Report() {
     const [uploadProgress, setUploadProgress] = useState(0);
     const [processing, setProcessing] = useState(false);
     const [aiResult, setAiResult] = useState(null);
+    const [submitted, setSubmitted] = useState(null); // { mediaType } after a successful upload
 
     const navigate = useNavigate();
 
@@ -49,6 +50,42 @@ export default function Report() {
             if (preview) URL.revokeObjectURL(preview);
         };
     }, [preview]);
+
+    // Poll the report's processing status so the confirmation screen reflects
+    // when analysis actually finishes (or fails), instead of guessing.
+    useEffect(() => {
+        if (!submitted?.id || submitted.status !== 'processing') return;
+        let cancelled = false;
+        let timer;
+        let attempts = 0;
+        const maxAttempts = 150; // ~7.5 min at 3s (videos can take a while)
+
+        const poll = async () => {
+            if (cancelled) return;
+            attempts += 1;
+            try {
+                const res = await fetch(`${API_BASE}/api/pothole/status/${submitted.id}`);
+                if (res.ok) {
+                    const s = await res.json();
+                    if (!cancelled && (s.status === 'done' || s.status === 'failed')) {
+                        setSubmitted((prev) => (prev ? { ...prev, status: s.status, error: s.error, severity: s.severity, confidence: s.confidence } : prev));
+                        return;
+                    }
+                }
+            } catch {
+                /* transient network error — keep polling */
+            }
+            if (cancelled) return;
+            if (attempts >= maxAttempts) {
+                setSubmitted((prev) => (prev ? { ...prev, status: 'timeout' } : prev));
+                return;
+            }
+            timer = setTimeout(poll, 3000);
+        };
+
+        timer = setTimeout(poll, 2500);
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [submitted?.id, submitted?.status, API_BASE]);
 
     const handleMediaTypeChange = (type) => {
         if (preview) URL.revokeObjectURL(preview);
@@ -260,6 +297,12 @@ export default function Report() {
         setFromPlace(null); setToPlace(null);
     };
 
+    const handleReportAnother = () => {
+        setSubmitted(null);
+        setAiResult(null);
+        resetForm();
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!mediaFile) return toast.error(`${mediaType === 'video' ? 'Video' : 'Image'} is required`);
@@ -303,11 +346,8 @@ export default function Report() {
                 xhr.send(fd);
             });
 
-            setAiResult(data?.ai || null);
-            const sev = data?.ai?.severity ? ` Severity: ${data.ai.severity.toUpperCase()}` : '';
-            const conf = data?.ai?.confidence != null ? ` (${(data.ai.confidence * 100).toFixed(0)}%)` : '';
-            toast.success(`Pothole reported successfully.${sev}${conf}`);
-            navigate('/map');
+            toast.success('Upload received — analyzing…');
+            setSubmitted({ mediaType, id: data?.id || null, status: data?.id ? 'processing' : 'done', error: null });
         } catch (err) {
             console.error(err);
             toast.error(err.message || 'Something went wrong');
@@ -460,7 +500,7 @@ export default function Report() {
                     {/* Actions */}
                     <div className="flex items-center gap-3">
                         <button type="submit" disabled={uploading} className="px-5 py-2.5 bg-[#628141] hover:bg-[#4f6a34] text-white rounded font-semibold disabled:opacity-50">
-                            {uploading ? (processing ? 'Analyzing...' : 'Uploading...') : 'Submit Report'}
+                            {uploading ? (processing ? 'Finishing...' : 'Uploading...') : 'Submit Report'}
                         </button>
                         <button type="button" onClick={resetForm} className="text-sm text-neutral-400 hover:text-white">Reset</button>
                     </div>
@@ -495,14 +535,14 @@ export default function Report() {
 
             {/* Upload / processing overlay */}
             {uploading && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+                <div className="fixed inset-0 z-1000 flex items-center justify-center bg-black/70 px-4">
                     <div className="bg-neutral-900 rounded-xl p-6 w-full max-w-md border border-neutral-700 shadow-2xl">
                         <div className="flex items-center gap-3 mb-4">
                             <div className="animate-spin rounded-full h-6 w-6 border-2 border-neutral-600 border-t-[#628141]"></div>
                             <h3 className="text-white font-semibold">
-                                {processing ? 'Analyzing with AI' : `Uploading ${mediaType}`}
+                                {processing ? 'Finishing up' : `Uploading ${mediaType}`}
                             </h3>
-                            <span className="ml-auto font-mono text-sm text-neutral-300">{processing ? 'Processing' : `${uploadProgress}%`}</span>
+                            <span className="ml-auto font-mono text-sm text-neutral-300">{processing ? 'Almost done' : `${uploadProgress}%`}</span>
                         </div>
                         <div className="w-full bg-neutral-800 rounded-full h-3 overflow-hidden border border-neutral-700">
                             {processing ? (
@@ -513,9 +553,113 @@ export default function Report() {
                         </div>
                         <p className="text-xs text-neutral-500 mt-3">
                             {processing
-                                ? (mediaType === 'video' ? 'Scanning video frames and marking potholes — this can take a little longer for videos.' : 'Running detection and marking the pothole on your image.')
+                                ? "Your file reached the server. AI analysis runs in the background — your report will appear on the map shortly."
                                 : 'Sending your file to the server.'}
                         </p>
+                    </div>
+                </div>
+            )}
+
+            {/* Post-upload confirmation: reflects real processing status */}
+            {submitted && (
+                <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/75 px-4">
+                    <div className="bg-neutral-900 rounded-2xl p-7 sm:p-8 w-full max-w-md border border-neutral-700 shadow-2xl text-center">
+                        {submitted.status === 'failed' ? (
+                            <>
+                                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-red-500/15 border border-red-500/40">
+                                    <svg className="h-8 w-8 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M18 6 6 18M6 6l12 12" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-xl font-bold text-white mb-2">Upload failed</h2>
+                                <p className="text-sm text-neutral-300 leading-relaxed">
+                                    {submitted.error ||
+                                        `Your ${submitted.mediaType} could not be uploaded. Please try again.`}
+                                </p>
+                                <div className="mt-6 flex flex-col gap-3">
+                                    <button
+                                        onClick={handleReportAnother}
+                                        className="px-4 py-2.5 bg-[#628141] hover:bg-[#4f6a34] text-white rounded-lg font-semibold text-sm"
+                                    >
+                                        Try again
+                                    </button>
+                                    <button onClick={() => navigate('/map')} className="text-sm text-neutral-400 hover:text-white">
+                                        Go to map
+                                    </button>
+                                </div>
+                            </>
+                        ) : submitted.status === 'done' ? (
+                            <>
+                                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#628141]/15 border border-[#628141]/40">
+                                    <svg className="h-8 w-8 text-[#8bae66]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M20 6 9 17l-5-5" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-xl font-bold text-white mb-2">Report analyzed & saved!</h2>
+                                <p className="text-sm text-neutral-300 leading-relaxed">
+                                    Your {submitted.mediaType} has been analyzed and added to the map.
+                                    {submitted.severity ? ` Detected severity: ${String(submitted.severity).toUpperCase()}` : ''}
+                                    {submitted.confidence != null ? ` (${(submitted.confidence * 100).toFixed(0)}% confidence).` : '.'}
+                                </p>
+                                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <button onClick={() => navigate('/map')} className="px-4 py-2.5 bg-[#628141] hover:bg-[#4f6a34] text-white rounded-lg font-semibold text-sm">
+                                        View Map
+                                    </button>
+                                    <button onClick={() => navigate('/dashboard')} className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white rounded-lg font-semibold text-sm">
+                                        View Dashboard
+                                    </button>
+                                </div>
+                                <button onClick={handleReportAnother} className="mt-3 text-sm text-neutral-400 hover:text-white">
+                                    Report another pothole
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {/* processing / timeout */}
+                                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#628141]/15 border border-[#628141]/40">
+                                    {submitted.status === 'timeout' ? (
+                                        <svg className="h-8 w-8 text-[#e7b06a]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <path d="M12 6v6l4 2" />
+                                        </svg>
+                                    ) : (
+                                        <div className="animate-spin rounded-full h-9 w-9 border-[3px] border-neutral-700 border-t-[#8bae66]" />
+                                    )}
+                                </div>
+                                <h2 className="text-xl font-bold text-white mb-2">
+                                    {submitted.status === 'timeout' ? 'Still processing…' : 'Analyzing your report…'}
+                                </h2>
+                                <p className="text-sm text-neutral-300 leading-relaxed">
+                                    Thanks for helping keep the roads safe. Your {submitted.mediaType} is being
+                                    analyzed by our AI to detect and mark potholes.
+                                </p>
+
+                                <div className="mt-4 rounded-lg border border-[#d98c2b]/30 bg-[#d98c2b]/10 p-3 flex items-start gap-2.5 text-left">
+                                    <svg className="h-5 w-5 flex-shrink-0 text-[#e7b06a] mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <circle cx="12" cy="12" r="10" />
+                                        <path d="M12 6v6l4 2" />
+                                    </svg>
+                                    <p className="text-xs text-[#e7b06a] leading-relaxed">
+                                        {submitted.mediaType === 'video'
+                                            ? "This can take a little while — videos are scanned frame by frame. Your report will appear on the map and dashboard once analysis finishes."
+                                            : "This takes a few moments. Your report will appear on the map and dashboard shortly."}
+                                        {' '}You don't need to wait here — feel free to browse.
+                                    </p>
+                                </div>
+
+                                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <button onClick={() => navigate('/map')} className="px-4 py-2.5 bg-[#628141] hover:bg-[#4f6a34] text-white rounded-lg font-semibold text-sm">
+                                        View Map
+                                    </button>
+                                    <button onClick={() => navigate('/dashboard')} className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white rounded-lg font-semibold text-sm">
+                                        View Dashboard
+                                    </button>
+                                </div>
+                                <button onClick={handleReportAnother} className="mt-3 text-sm text-neutral-400 hover:text-white">
+                                    Report another pothole
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

@@ -15,9 +15,6 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 
-//images path
-app.use("/images", express.static("public/images"));
-
 //cors config
 app.use(
     cors({
@@ -25,6 +22,9 @@ app.use(
         credentials: true,
     })
 );
+
+//images path
+app.use("/images", express.static("public/images"));
 
 connectDB();
 

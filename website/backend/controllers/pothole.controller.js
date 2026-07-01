@@ -1,5 +1,5 @@
 import { Pothole } from "../models/pothole.model.js";
-import { uploadBufferToCloudinary, getPlayableUrl } from "../services/cloudinary.service.js";
+import { uploadBufferToCloudinary, uploadBufferToCloudinaryWithRetry, getPlayableUrl } from "../services/cloudinary.service.js";
 import { sendToAIModel } from "../services/ai.service.js";
 import { shouldTriggerAlert } from "../utils/alertPothole.util.js";
 
@@ -69,6 +69,46 @@ const resolveLocation = (body) => {
     return { error: "Location details are required" };
 };
 
+// Stores the analyzed media on Cloudinary only (with timeout retries). If it
+// fails the error propagates so the report is marked failed and the user is
+// told. Returns { mediaUrl, storage }.
+const storeMedia = async (buffer, mediaType) => {
+    const cloudinaryRes = await uploadBufferToCloudinaryWithRetry(buffer, mediaType);
+    return { mediaUrl: getPlayableUrl(cloudinaryRes, mediaType), storage: "cloudinary" };
+};
+
+// Runs the slow work (AI detection + media upload) after the HTTP response has
+// already been sent, then updates the placeholder record. The client polls the
+// status endpoint to learn when it's done (or if it failed).
+const processUploadInBackground = async ({ potholeId, buffer, mimetype, mediaType }) => {
+    try {
+        const aiResult = await sendToAIModel(buffer, mimetype);
+
+        // Prefer the annotated (marked) media produced by the AI so the saved
+        // file shows the detected potholes. Fall back to the original upload.
+        const bufferToUpload = aiResult.annotatedBuffer || buffer;
+        const { mediaUrl, storage } = await storeMedia(bufferToUpload, mediaType);
+
+        await Pothole.findByIdAndUpdate(potholeId, {
+            severity: aiResult.severity,
+            confidence: aiResult.confidence,
+            storage,
+            processingStatus: "done",
+            error: undefined,
+            ...(mediaType === "video" ? { videoURL: mediaUrl } : { imageURL: mediaUrl }),
+        });
+    } catch (error) {
+        console.error("Background pothole processing failed:", error?.message || error);
+        await Pothole.findByIdAndUpdate(potholeId, {
+            processingStatus: "failed",
+            error:
+                mediaType === "video"
+                    ? "Your video could not be uploaded. Please try again."
+                    : "Your image could not be uploaded. Please try again.",
+        }).catch(() => null);
+    }
+};
+
 const uploadPotholeData = async (req, res) => {
     try {
         const media = getUploadedMediaFile(req);
@@ -87,42 +127,66 @@ const uploadPotholeData = async (req, res) => {
             ? Number(req.body.accuracy)
             : undefined;
 
-        const aiResult = await sendToAIModel(file.buffer, file.mimetype);
-
-        // Prefer the annotated (marked) media produced by the AI so the saved
-        // file shows the detected potholes. Fall back to the original upload.
-        const bufferToUpload = aiResult.annotatedBuffer || file.buffer;
-        const cloudinaryRes = await uploadBufferToCloudinary(bufferToUpload, mediaType);
-        const mediaUrl = getPlayableUrl(cloudinaryRes, mediaType);
-
+        // Create a placeholder record up-front so the client has an id to poll
+        // for status. Media URL + severity are filled in once analysis finishes.
         const pothole = await Pothole.create({
             location: {
                 type: "Point",
                 coordinates: loc.coordinates,
             },
-            severity: aiResult.severity,
-            confidence: aiResult.confidence,
             mediaType,
             source: "upload",
+            processingStatus: "processing",
             ...(accuracy != null && !Number.isNaN(accuracy) ? { accuracy } : {}),
             ...(loc.route ? { route: loc.route } : {}),
-            ...(mediaType === "video"
-                ? { videoURL: mediaUrl }
-                : { imageURL: mediaUrl }),
         });
 
-        return res.status(201).json({
-            message: "Pothole data uploaded successfully",
-            data: pothole,
-            ai: {
-                severity: aiResult.severity,
-                confidence: aiResult.confidence,
-                detections: aiResult.detections,
-            },
+        // Respond as soon as the file is received and validated. The AI analysis
+        // and media upload continue in the background; the client polls status.
+        res.status(202).json({
+            message: "Upload received. We're analyzing it in the background.",
+            id: pothole._id,
+            status: "processing",
+            mediaType,
+        });
+
+        // Fire-and-forget: capture the in-memory buffer so processing can outlive
+        // the request. Failures are recorded on the record for the client to see.
+        processUploadInBackground({
+            potholeId: pothole._id,
+            buffer: file.buffer,
+            mimetype: file.mimetype,
+            mediaType,
         });
 
     } catch (error) {
         console.error("Error uploading pothole data:", error);
+        if (!res.headersSent) {
+            return res.status(500).json({ message: "Something went wrong" });
+        }
+    }
+};
+
+// Lightweight status endpoint the client polls after an upload.
+const getPotholeStatus = async (req, res) => {
+    try {
+        const pothole = await Pothole.findById(req.params.id).select(
+            "processingStatus error severity confidence mediaType imageURL videoURL storage"
+        );
+        if (!pothole) {
+            return res.status(404).json({ message: "Report not found" });
+        }
+        return res.status(200).json({
+            status: pothole.processingStatus,
+            error: pothole.error || null,
+            mediaType: pothole.mediaType,
+            severity: pothole.severity,
+            confidence: pothole.confidence,
+            storage: pothole.storage,
+            mediaURL: pothole.mediaType === "video" ? pothole.videoURL : pothole.imageURL,
+        });
+    } catch (error) {
+        console.error("Error getting pothole status:", error);
         return res.status(500).json({ message: "Something went wrong" });
     }
 };
@@ -224,6 +288,7 @@ const getNearbyPotholes = async (req, res)=>{
 
         const searchRadius = Number(radius) || 200;        //default 200m
         const potholes = await Pothole.find({
+            processingStatus: { $nin: ["processing", "failed"] },
             location: {
                 $near: {
                     $geometry: {
@@ -260,6 +325,7 @@ const getAllPotholes = async (req, res) => {
         // If coordinates provided, filter by 20km radius
         if (lat && lng) {
             const potholes = await Pothole.find({
+                processingStatus: { $nin: ["processing", "failed"] },
                 location: {
                     $near: {
                         $geometry: {
@@ -280,7 +346,9 @@ const getAllPotholes = async (req, res) => {
             });
         } else {
             // If no coordinates provided, return latest potholes
-            const potholes = await Pothole.find().sort({ createdAt: -1 }).limit(500);
+            const potholes = await Pothole.find({ processingStatus: { $nin: ["processing", "failed"] } })
+                .sort({ createdAt: -1 })
+                .limit(500);
 
             return res.status(200).json({
                 count: potholes.length,
@@ -297,6 +365,7 @@ const getAllPotholes = async (req, res) => {
 
 export {
     uploadPotholeData,
+    getPotholeStatus,
     analyzePotholeImage,
     liveDetect,
     getNearbyPotholes,

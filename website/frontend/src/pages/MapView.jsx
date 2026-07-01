@@ -2,6 +2,26 @@ import { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
+// Distance (meters) within which a pothole counts as "nearby" and gets
+// highlighted, and the size of the ring drawn around the user.
+const NEARBY_RADIUS_M = 500;
+
+// Compact "x min ago" style relative time.
+const timeAgo = (dateStr) => {
+    if (!dateStr) return '';
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 30) return `${days}d ago`;
+    return new Date(dateStr).toLocaleDateString();
+};
+
+const formatDistance = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+
 export default function Map() {
     const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     const [potholes, setPotholes] = useState([]);
@@ -168,9 +188,9 @@ export default function Map() {
         userMarker.bindPopup('<div><strong>Your Location</strong></div>');
         userMarkerRef.current = userMarker;
 
-        // Add 200m radius circle
+        // Add nearby-radius circle
         const userCircle = L.circle([userLocation.lat, userLocation.lng], {
-            radius: 200,                   // 200 meters
+            radius: NEARBY_RADIUS_M,
             fillColor: '#628141',
             color: '#628141',
             weight: 2,
@@ -201,7 +221,7 @@ export default function Map() {
         markersLayer.clearLayers();
 
         const nearby = [];
-        const NEARBY_THRESHOLD = 200; // meters
+        const NEARBY_THRESHOLD = NEARBY_RADIUS_M; // meters
 
         potholes.forEach((pothole) => {
             const coords = pothole.location?.coordinates;
@@ -267,6 +287,18 @@ export default function Map() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const recenterToUser = () => {
+        if (userLocation && mapRef.current) {
+            mapRef.current.flyTo([userLocation.lat, userLocation.lng], 15, { duration: 0.8 });
+        }
+    };
+
+    const distanceFor = (pothole) => {
+        const coords = pothole.location?.coordinates;
+        if (!userLocation || !coords || coords.length < 2) return null;
+        return haversine(userLocation.lat, userLocation.lng, coords[1], coords[0]);
     };
 
     const getSeverityBadgeColor = (severity) => {
@@ -335,7 +367,7 @@ export default function Map() {
 
                     {hasNearby && (
                         <div className="mt-4 inline-block bg-red-900/70 text-red-100 px-3 py-1 rounded text-sm font-semibold">
-                            ⚠ {nearbyIds.length} pothole{nearbyIds.length > 1 ? 's' : ''} within 200m
+                            ⚠ {nearbyIds.length} pothole{nearbyIds.length > 1 ? 's' : ''} within {NEARBY_RADIUS_M}m
                         </div>
                     )}
                 </div>
@@ -343,26 +375,67 @@ export default function Map() {
                 <div className="grid lg:grid-cols-3 gap-8 mb-12">
                     {/* Map Container */}
                     <div className="lg:col-span-2">
-                        <div className="bg-neutral-900/50 rounded-xl overflow-hidden border border-neutral-800 shadow-2xl h-150 backdrop-blur-sm">
-                            <div className="bg-neutral-800/50 px-6 py-4 border-b border-neutral-700">
+                        <div className="bg-neutral-900/50 rounded-xl overflow-hidden border border-neutral-800 shadow-2xl h-150 backdrop-blur-sm flex flex-col">
+                            <div className="bg-neutral-800/50 px-6 py-4 border-b border-neutral-700 flex items-center justify-between">
                                 <h2 className="text-lg font-semibold text-white flex items-center">
                                     <svg className="w-5 h-5 mr-2 text-[#628141]" fill="currentColor" viewBox="0 0 20 20">
                                         <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
                                     </svg>
                                     Interactive Map View
                                 </h2>
+                                <span className="text-xs text-neutral-400 hidden sm:inline">Tap a marker for details</span>
                             </div>
 
-                            <div ref={mapContainerRef} className="w-full" style={{ height: 520 }} />
+                            <div className="relative flex-1">
+                                <div ref={mapContainerRef} className="w-full h-full" />
+
+                                {/* Severity legend */}
+                                <div className="absolute bottom-3 left-3 z-[1000] bg-neutral-900/90 backdrop-blur border border-neutral-700 rounded-lg px-3 py-2 shadow-lg pointer-events-none">
+                                    <p className="text-[10px] uppercase tracking-wider text-neutral-400 mb-1.5 font-semibold">Severity</p>
+                                    <div className="flex flex-col gap-1">
+                                        <span className="flex items-center gap-2 text-xs text-neutral-200"><span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]" /> High</span>
+                                        <span className="flex items-center gap-2 text-xs text-neutral-200"><span className="h-2.5 w-2.5 rounded-full bg-[#f59e0b]" /> Medium</span>
+                                        <span className="flex items-center gap-2 text-xs text-neutral-200"><span className="h-2.5 w-2.5 rounded-full bg-[#10b981]" /> Low</span>
+                                    </div>
+                                </div>
+
+                                {/* Recenter to my location */}
+                                {userLocation && (
+                                    <button
+                                        onClick={recenterToUser}
+                                        title="Recenter to my location"
+                                        className="absolute top-3 right-3 z-[1000] flex items-center gap-2 bg-neutral-900/90 backdrop-blur border border-neutral-700 hover:border-[#628141] text-white text-xs font-semibold rounded-lg px-3 py-2 shadow-lg transition-colors"
+                                    >
+                                        <svg className="h-4 w-4 text-[#8bae66]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                            <circle cx="12" cy="12" r="3" />
+                                            <path strokeLinecap="round" d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                                        </svg>
+                                        My location
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
 
                     {/* Info Panel */}
                     <div className="lg:col-span-1">
                         <div className="bg-neutral-900/50 rounded-xl border border-neutral-800 shadow-2xl h-150 flex flex-col backdrop-blur-sm">
-                            <div className="bg-neutral-800/50 px-6 py-4 border-b border-neutral-700">
-                                <h2 className="text-lg font-semibold text-white">Recent Reports</h2>
-                                <p className="text-sm text-neutral-400 mt-1">{potholes.length} total reports</p>
+                            <div className="bg-neutral-800/50 px-6 py-4 border-b border-neutral-700 flex items-start justify-between">
+                                <div>
+                                    <h2 className="text-lg font-semibold text-white">Recent Reports</h2>
+                                    <p className="text-sm text-neutral-400 mt-1">{potholes.length} total reports</p>
+                                </div>
+                                <button
+                                    onClick={fetchPotholes}
+                                    disabled={loading}
+                                    title="Refresh"
+                                    className="flex items-center gap-1.5 text-xs font-semibold text-neutral-300 hover:text-white bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
+                                >
+                                    <svg className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3" />
+                                    </svg>
+                                    Refresh
+                                </button>
                             </div>
 
                             <div className="flex-1 overflow-y-auto p-6">
@@ -383,6 +456,8 @@ export default function Map() {
                                     <div className="space-y-3">
                                         {potholes.map((pothole, index) => {
                                             const isNearby = nearbyIds.includes(pothole._id);
+                                            const dist = distanceFor(pothole);
+                                            const conf = pothole.confidence != null ? pothole.confidence * 100 : 0;
                                             return (
                                                 <div
                                                     key={pothole._id || index}
@@ -392,24 +467,31 @@ export default function Map() {
                                                             : 'bg-neutral-800/50 border-neutral-700 hover:border-[#628141] hover:bg-neutral-800/70'
                                                         } border ${isNearby ? 'ring-2 ring-red-500/50' : ''}`}
                                                 >
-                                                    <div className="flex items-start justify-between mb-2">
-                                                        <p className="font-semibold text-white">
-                                                            {isNearby && '⚠ '}Report #{index + 1}
+                                                    <div className="flex items-start justify-between mb-2 gap-2">
+                                                        <p className="font-semibold text-white flex items-center gap-1.5 min-w-0">
+                                                            <span className="text-neutral-500 text-xs">{pothole.mediaType === 'video' ? '🎥' : '📷'}</span>
+                                                            <span className="truncate">{isNearby && '⚠ '}Report #{index + 1}</span>
                                                         </p>
-                                                        <span className={`px-2 py-1 rounded text-xs font-medium border ${getSeverityBadgeColor(pothole.severity)}`}>
-                                                            {pothole.severity?.toUpperCase()}
+                                                        <span className={`px-2 py-1 rounded text-xs font-medium border shrink-0 ${getSeverityBadgeColor(pothole.severity)}`}>
+                                                            {pothole.severity?.toUpperCase() || 'N/A'}
                                                         </span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between text-xs text-neutral-400 mb-2">
+                                                        <span>{timeAgo(pothole.createdAt)}</span>
+                                                        {dist != null && (
+                                                            <span className={isNearby ? 'text-red-300 font-semibold' : 'text-neutral-300'}>
+                                                                {formatDistance(dist)} away
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="flex items-center justify-between text-sm">
                                                         <span className="text-neutral-400">Confidence:</span>
-                                                        <span className="text-white font-medium">
-                                                            {(pothole.confidence * 100).toFixed(0)}%
-                                                        </span>
+                                                        <span className="text-white font-medium">{conf.toFixed(0)}%</span>
                                                     </div>
                                                     <div className="mt-2 w-full bg-neutral-700 rounded-full h-1.5">
                                                         <div
                                                             className="bg-[#628141] h-1.5 rounded-full transition-all duration-300"
-                                                            style={{ width: `${pothole.confidence * 100}%` }}
+                                                            style={{ width: `${conf}%` }}
                                                         ></div>
                                                     </div>
                                                 </div>
@@ -422,12 +504,24 @@ export default function Map() {
                             {/* Selected Pothole Details */}
                             {selectedPothole && (
                                 <div className="border-t border-neutral-700 p-6 bg-neutral-800/30">
-                                    <h3 className="text-lg font-bold text-white mb-4 flex items-center">
-                                        <svg className="w-5 h-5 mr-2 text-[#628141]" fill="currentColor" viewBox="0 0 20 20">
-                                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                                        </svg>
-                                        Details
-                                    </h3>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h3 className="text-lg font-bold text-white flex items-center">
+                                            <svg className="w-5 h-5 mr-2 text-[#628141]" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                            </svg>
+                                            Details
+                                        </h3>
+                                        <button
+                                            onClick={() => setSelectedPotholeId(null)}
+                                            title="Close details"
+                                            aria-label="Close details"
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700 border border-neutral-700 transition-colors"
+                                        >
+                                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M18 6 6 18M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
                                     {(selectedPothole.videoURL || selectedPothole.imageURL) && (
                                         selectedPothole.mediaType === 'video' || selectedPothole.videoURL ? (
                                             <video

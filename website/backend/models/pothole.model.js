@@ -15,11 +15,11 @@ const potholeSchema = new mongoose.Schema({
     severity: {
         type: String,
         enum: ["low", "medium", "high"],
-        required: true
+        // Not required at creation time: reports start in "processing" and get
+        // their severity once AI analysis finishes.
     },
     confidence: {
         type: Number,
-        required: true
     },
     mediaType: {
         type: String,
@@ -56,12 +56,29 @@ const potholeSchema = new mongoose.Schema({
         type: String,
         enum: ["repaired", "unrepaired"],
         default: "unrepaired"
+    },
+    // Lifecycle of the AI analysis + media upload done in the background.
+    processingStatus: {
+        type: String,
+        enum: ["processing", "done", "failed"],
+        default: "done"
+    },
+    // Where the media is hosted once processing completes.
+    storage: {
+        type: String,
+        enum: ["cloudinary", "local"],
+    },
+    // Human-readable reason when processingStatus is "failed".
+    error: {
+        type: String,
     }
 },{
     timestamps: true
 });
 
 potholeSchema.pre("validate", async function () {
+    // Media URL is only required once processing is finished successfully.
+    if (this.processingStatus !== "done") return;
     if (this.mediaType === "video" && !this.videoURL) {
         throw new Error("videoURL is required for video reports");
     }
