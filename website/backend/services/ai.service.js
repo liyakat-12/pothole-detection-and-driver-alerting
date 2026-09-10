@@ -29,7 +29,9 @@ const resolvePythonExecutable = () => {
 const PYTHON_EXECUTABLE = resolvePythonExecutable();
 const AI_SCRIPT_PATH = path.resolve(__dirname, "../ai_predict.py");
 const AI_SERVER_PATH = path.resolve(__dirname, "../ai_server.py");
-const MODEL_PATH = path.resolve(__dirname, "../../../ai/runs/detect/train2/weights/best.pt");
+const MODEL_PATH = process.env.MODEL_PATH
+    ? path.resolve(process.env.MODEL_PATH)
+    : path.resolve(__dirname, "../../../ai/runs/detect/train2/weights/best.pt");
 
 const mapSeverity = (confidence) => {
     if (confidence >= 0.8) return "high";
@@ -178,6 +180,8 @@ const sendToAIModel = async (buffer, mimetype = "image/jpeg", conf) => {
 
     try {
         let detections;
+        let frameWidth = null;
+        let frameHeight = null;
         if (isVideo) {
             // Videos go through the one-shot script (frame-by-frame encoding).
             const rawResult = await runPythonDetection(inputFilePath, outputFilePath, conf);
@@ -191,6 +195,8 @@ const sendToAIModel = async (buffer, mimetype = "image/jpeg", conf) => {
             // Images/live frames use the persistent model server (fast, no reload).
             const resp = await requestImageDetection(inputFilePath, outputFilePath, conf);
             detections = Array.isArray(resp.detections) ? resp.detections : [];
+            frameWidth = resp.width ?? null;
+            frameHeight = resp.height ?? null;
         }
 
         const bestDetection = detections.reduce((best, current) => {
@@ -199,6 +205,7 @@ const sendToAIModel = async (buffer, mimetype = "image/jpeg", conf) => {
         }, null);
 
         const confidence = bestDetection ? Number(bestDetection.confidence) : 0;
+        const area = bestDetection?.area != null ? Number(bestDetection.area) : null;
         const severity = mapSeverity(confidence);
 
         // Read back the annotated (marked) media so the caller can store it
@@ -209,7 +216,10 @@ const sendToAIModel = async (buffer, mimetype = "image/jpeg", conf) => {
         return {
             severity,
             confidence,
+            area,
             detections,
+            frameWidth,
+            frameHeight,
             mediaType: isVideo ? "video" : "image",
             annotatedBuffer,
             annotatedMimeType: isVideo ? "video/mp4" : "image/jpeg",

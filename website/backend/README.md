@@ -1,41 +1,59 @@
 # Backend AI Integration
 
-This backend is configured to receive pothole image uploads from the frontend, run the trained YOLO model, and store the prediction result along with the image in Cloudinary and MongoDB.
+Express backend for pothole uploads, live frames, and YOLOv8 inference.
+
+## What it does
+
+1. Receives image/video/live frames from the frontend (`/api/pothole`)
+2. Runs detection via Python (`ai.service.js` → `ai_server.py` / `ai_predict.py`)
+3. Maps confidence → severity in **`ai.service.js`** (not in Python)
+4. Stores annotated media on Cloudinary and metadata + GPS in MongoDB
 
 ## Setup
 
-1. Install Node dependencies:
-
 ```bash
 cd website/backend
 npm install
-```
-
-2. Install Python dependencies:
-
-```bash
-cd website/backend
 python -m pip install -r requirements.txt
 ```
 
-3. Make sure the trained model file exists at `../../ai/runs/detect/train2/weights/best.pt` relative to `website/backend`.
+Ensure trained weights exist at:
 
-4. Start the backend:
+```text
+ai/runs/detect/train2/weights/best.pt
+```
+
+(relative to repo root; resolved from `services/ai.service.js`)
+
+Create `.env` (see root or `website/README.md`), then:
 
 ```bash
 npm run dev
 ```
 
+## AI processes
+
+| Script | Used for | Behavior |
+|--------|----------|----------|
+| `ai_server.py` | Images + live frames | Persistent process; model loaded once; JSON over stdin/stdout |
+| `ai_predict.py` | Videos | One-shot process per upload |
+
+Optional: set `PYTHON_EXECUTABLE` in `.env` if `python` is not on PATH.
+
+## Severity thresholds
+
+| Confidence | Severity |
+|------------|----------|
+| ≥ 0.8 | high |
+| ≥ 0.5 | medium |
+| &lt; 0.5 | low |
+
 ## Frontend
 
-From `website/frontend`:
-
 ```bash
+cd website/frontend
 npm install
 npm run dev
 ```
 
-## Notes
-
-- The backend uses `PYTHON_EXECUTABLE` environment variable if provided. Otherwise it falls back to `python`.
-- The frontend posts image uploads to `/api/pothole`, which now runs the AI model before saving the record.
+Set `VITE_API_URL` to your backend URL (e.g. `http://localhost:8000`).

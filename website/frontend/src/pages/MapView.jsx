@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { API_BASE } from '../apiBase.js';
 
 // Distance (meters) within which a pothole counts as "nearby" and gets
 // highlighted, and the size of the ring drawn around the user.
@@ -23,7 +24,6 @@ const timeAgo = (dateStr) => {
 const formatDistance = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
 
 export default function Map() {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     const [potholes, setPotholes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedPotholeId, setSelectedPotholeId] = useState(null); // FIX: Use ID instead of object

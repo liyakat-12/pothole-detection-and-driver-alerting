@@ -1,21 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import { API_BASE } from '../apiBase.js';
 
-const SAMPLE_INTERVAL_MS = 700;    // how often we grab a frame (model stays loaded server-side)
-const SAVE_COOLDOWN_MS = 6000;     // min gap between auto-saved detections
+const SAMPLE_INTERVAL_MS = 400;    // how often we grab a frame (model stays loaded server-side)
+const SAVE_COOLDOWN_MS = 1000;     // min gap between auto-saved detections
 const FRAME_MAX_WIDTH = 800;       // frame width sent to the server
 
+const formatArea = (area) => (area != null && !Number.isNaN(area) ? `${Math.round(area).toLocaleString()} px^2` : 'N/A');
+
 export default function LiveDetect() {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
+    const overlayRef = useRef(null);
     const streamRef = useRef(null);
     const intervalRef = useRef(null);
     const watchIdRef = useRef(null);
     const busyRef = useRef(false);
     const lastSaveRef = useRef(0);
     const locationRef = useRef(null);
+
+    // Latest detections + the pixel size of the frame the model processed, so we
+    // can scale the boxes onto the displayed (object-contain) video element.
+    const detectionsRef = useRef([]);
+    const frameDimRef = useRef(null);
+    const rafRef = useRef(null);
 
     const [streaming, setStreaming] = useState(false);
     const [location, setLocation] = useState(null);
@@ -68,6 +77,7 @@ export default function LiveDetect() {
             setStreaming(true);
             setStatus('running');
             intervalRef.current = setInterval(captureAndSend, SAMPLE_INTERVAL_MS);
+            rafRef.current = requestAnimationFrame(drawOverlay);
         } catch (e) {
             console.error(e);
             setStatus('error');
@@ -77,12 +87,88 @@ export default function LiveDetect() {
 
     const stopLive = () => {
         if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
         if (watchIdRef.current != null && navigator.geolocation) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
         if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
         if (videoRef.current) videoRef.current.srcObject = null;
+        detectionsRef.current = [];
+        frameDimRef.current = null;
+        const overlay = overlayRef.current;
+        if (overlay) {
+            const ctx = overlay.getContext('2d');
+            ctx?.clearRect(0, 0, overlay.width, overlay.height);
+        }
         busyRef.current = false;
         setStreaming(false);
         setStatus('idle');
+    };
+
+    // Continuously redraw the detection boxes on the overlay canvas so they stay
+    // aligned with the video even as it resizes. Boxes only update each scan
+    // (~SAMPLE_INTERVAL_MS), so between scans they hold their last position.
+    const drawOverlay = () => {
+        const video = videoRef.current;
+        const overlay = overlayRef.current;
+        if (video && overlay) {
+            const elemW = video.clientWidth;
+            const elemH = video.clientHeight;
+            if (overlay.width !== elemW) overlay.width = elemW;
+            if (overlay.height !== elemH) overlay.height = elemH;
+
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+            const dets = detectionsRef.current;
+            const dim = frameDimRef.current;
+            if (dets?.length && dim?.w && dim?.h && video.videoWidth) {
+                // The video is rendered with object-contain, so it may be
+                // letterboxed inside the element. Compute the actual content rect.
+                const videoAR = video.videoWidth / video.videoHeight;
+                const elemAR = elemW / elemH;
+                let dispW, dispH, offX, offY;
+                if (videoAR > elemAR) {
+                    dispW = elemW;
+                    dispH = elemW / videoAR;
+                    offX = 0;
+                    offY = (elemH - dispH) / 2;
+                } else {
+                    dispH = elemH;
+                    dispW = elemH * videoAR;
+                    offX = (elemW - dispW) / 2;
+                    offY = 0;
+                }
+
+                const sx = dispW / dim.w;
+                const sy = dispH / dim.h;
+
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#ef4444';
+                ctx.font = '600 14px sans-serif';
+                ctx.textBaseline = 'alphabetic';
+
+                dets.forEach((d) => {
+                    const b = d.bbox;
+                    if (!b) return;
+                    const x = offX + b.x1 * sx;
+                    const y = offY + b.y1 * sy;
+                    const w = (b.x2 - b.x1) * sx;
+                    const h = (b.y2 - b.y1) * sy;
+
+                    ctx.strokeRect(x, y, w, h);
+
+                    const areaText = d.area != null ? ` · ${Math.round(d.area).toLocaleString()} px^2` : '';
+                    const label = `Pothole ${(d.confidence * 100).toFixed(0)}%${areaText}`;
+                    const tw = ctx.measureText(label).width;
+                    const labelY = Math.max(18, y);
+                    ctx.fillStyle = '#ef4444';
+                    ctx.fillRect(x, labelY - 18, tw + 10, 18);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(label, x + 5, labelY - 5);
+                    ctx.fillStyle = '#ef4444';
+                });
+            }
+        }
+        rafRef.current = requestAnimationFrame(drawOverlay);
     };
 
     const captureAndSend = async () => {
@@ -119,6 +205,10 @@ export default function LiveDetect() {
             if (res.ok && data) {
                 setError(null);
                 setLastResult(data);
+                detectionsRef.current = Array.isArray(data.ai?.detections) ? data.ai.detections : [];
+                frameDimRef.current = (data.ai?.width && data.ai?.height)
+                    ? { w: data.ai.width, h: data.ai.height }
+                    : null;
                 if (data.saved) {
                     lastSaveRef.current = Date.now();
                     setSavedCount((c) => c + 1);
@@ -136,6 +226,7 @@ export default function LiveDetect() {
 
     const detected = lastResult?.detected;
     const conf = lastResult?.ai?.confidence;
+    const area = lastResult?.ai?.area;
 
     return (
         <div className="min-h-[calc(100vh-80px)] py-12 px-4 sm:px-6">
@@ -155,6 +246,8 @@ export default function LiveDetect() {
                     <div className="lg:col-span-2">
                         <div className="relative bg-black rounded-xl overflow-hidden border border-neutral-800 shadow-2xl">
                             <video ref={videoRef} playsInline muted className="w-full max-h-[60vh] object-contain bg-black" />
+                            {/* Bounding-box overlay drawn on top of the live video */}
+                            <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full" />
                             {/* Detection overlay banner */}
                             {streaming && (
                                 <div className={`absolute top-3 left-3 px-3 py-1.5 rounded-full text-xs font-semibold ${detected ? 'bg-red-600 text-white' : 'bg-[#628141] text-white'}`}>
@@ -225,6 +318,10 @@ export default function LiveDetect() {
                                     <div className="flex justify-between">
                                         <span className="text-neutral-400">Confidence</span>
                                         <span className="text-white">{conf != null ? `${(conf * 100).toFixed(0)}%` : 'N/A'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-neutral-400">Area</span>
+                                        <span className="text-white">{formatArea(area)}</span>
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-neutral-400">Saved this scan</span>

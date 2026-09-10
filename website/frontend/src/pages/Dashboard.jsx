@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { API_BASE } from '../apiBase.js';
 
 export default function Dashboard() {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     const [potholes, setPotholes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [severityFilter, setSeverityFilter] = useState('all');
@@ -47,6 +47,8 @@ export default function Dashboard() {
         if (s === 'low') return 'bg-[#628141]/10 text-[#8bae66] border-[#628141]/20';
         return 'bg-neutral-500/10 text-neutral-400 border-neutral-500/20';
     };
+
+    const formatArea = (area) => (area != null && !Number.isNaN(area) ? `${Math.round(area).toLocaleString()} px^2` : 'N/A');
 
     const stats = [
         { label: 'Total Reports', value: total, sub: 'All time', color: 'text-white', ring: 'border-neutral-800' },
@@ -238,6 +240,12 @@ export default function Dashboard() {
                                     <span className="text-neutral-400">Confidence (accuracy)</span>
                                     <span className="text-white font-semibold">{selected.confidence != null ? `${(selected.confidence * 100).toFixed(0)}%` : 'N/A'}</span>
                                 </div>
+                                {selected.area != null && (
+                                    <div className="flex justify-between col-span-2">
+                                        <span className="text-neutral-400">Area</span>
+                                        <span className="text-white font-semibold">{formatArea(selected.area)}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between">
                                     <span className="text-neutral-400">Source</span>
                                     <span className="text-white">{selected.source === 'live' ? 'Live' : 'Upload'}</span>

@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { API_BASE } from '../apiBase.js';
 
 export default function Report() {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
     const [mediaType, setMediaType] = useState('image');
     const [mediaFile, setMediaFile] = useState(null);
@@ -68,7 +68,7 @@ export default function Report() {
                 if (res.ok) {
                     const s = await res.json();
                     if (!cancelled && (s.status === 'done' || s.status === 'failed')) {
-                        setSubmitted((prev) => (prev ? { ...prev, status: s.status, error: s.error, severity: s.severity, confidence: s.confidence } : prev));
+                        setSubmitted((prev) => (prev ? { ...prev, status: s.status, error: s.error, severity: s.severity, confidence: s.confidence, area: s.area } : prev));
                         return;
                     }
                 }
@@ -510,6 +510,9 @@ export default function Report() {
                             <h2 className="text-lg font-semibold mb-2">AI Detection Result</h2>
                             <p className="text-sm text-neutral-300">Severity: <span className="font-semibold text-white">{aiResult.severity || 'unknown'}</span></p>
                             <p className="text-sm text-neutral-300">Confidence: <span className="font-semibold text-white">{aiResult.confidence != null ? `${(aiResult.confidence * 100).toFixed(0)}%` : 'N/A'}</span></p>
+                            {aiResult.area != null && (
+                                <p className="text-sm text-neutral-300">Area: <span className="font-semibold text-white">{Math.round(aiResult.area).toLocaleString()} px^2</span></p>
+                            )}
                             <p className="text-sm text-neutral-300">Detections: <span className="font-semibold text-white">{Array.isArray(aiResult.detections) ? aiResult.detections.length : 0}</span></p>
                         </div>
                     )}
@@ -599,7 +602,9 @@ export default function Report() {
                                 <p className="text-sm text-neutral-300 leading-relaxed">
                                     Your {submitted.mediaType} has been analyzed and added to the map.
                                     {submitted.severity ? ` Detected severity: ${String(submitted.severity).toUpperCase()}` : ''}
-                                    {submitted.confidence != null ? ` (${(submitted.confidence * 100).toFixed(0)}% confidence).` : '.'}
+                                    {submitted.confidence != null ? ` (${(submitted.confidence * 100).toFixed(0)}% confidence` : ''}
+                                    {submitted.area != null ? `, area ${Math.round(submitted.area).toLocaleString()} px^2` : ''}
+                                    {submitted.confidence != null ? ').' : '.'}
                                 </p>
                                 <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <button onClick={() => navigate('/map')} className="px-4 py-2.5 bg-[#628141] hover:bg-[#4f6a34] text-white rounded-lg font-semibold text-sm">

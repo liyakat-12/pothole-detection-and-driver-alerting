@@ -1,171 +1,141 @@
-# PotholeDetect
+# PotholeDetect (Website)
 
-Community-powered pothole reporting and tracking. When you open the app it shows nearby potholes on an interactive map; clicking any marker reveals its photo/video plus the AI detection confidence (accuracy) and location. You can contribute in three ways:
+React frontend + Express backend for the AI-Based Pothole Detection System.
 
-- **Upload a photo** — pinned to an exact spot using your GPS or by picking a point on the map.
-- **Upload a video** of a road stretch — its location is set by place names (a route "from → to"), geocoded and shown on the map.
-- **Live detection** — stream your camera while you travel; the AI scans frames in real time, continuously sends your location to the backend, and auto-saves each detected pothole (with the marked frame) at its GPS position.
-
-A Python YOLO service classifies severity/confidence and draws bounding boxes on the detected potholes (on images and videos). Reports are stored in MongoDB (media on Cloudinary) and rendered on a Leaflet map.
+For the full project (including model training under `ai/`), see the root [`README.md`](../README.md).
 
 ---
 
-## Project structure
+## What this app does
 
-Top-level folders:
+- **Report** — upload image (GPS/map) or video (from→to route)
+- **Live** — webcam detection with overlay; autosave when confidence is high enough
+- **Map** — Leaflet markers + nearby highlight (~500 m)
+- **Dashboard** — severity / source stats
 
-- `backend/` — Express.js API, MongoDB models, controllers, services (AI, Cloudinary), and multer middleware for uploads.
-- `frontend/` — React + Vite SPA with Tailwind and Leaflet for maps.
+AI runs on the backend via Python YOLOv8 (`best.pt`). Media goes to Cloudinary; metadata + GPS go to MongoDB.
 
-Key files:
+---
 
-- `backend/server.js` — Express server entry
-- `backend/routes/pothole.routes.js` — Pothole endpoints
-- `backend/controllers/pothole.controller.js` — Controller logic for upload, list, search
-- `frontend/src/pages/Report.jsx` — Pothole report form (image GPS / video place-route)
-- `frontend/src/pages/LiveDetect.jsx` — Live camera detection (auto-saves detections with GPS)
-- `frontend/src/pages/MapView.jsx` — Map + markers + user location
-- `backend/ai_predict.py` — YOLO inference; draws boxes on images/videos
+## Structure
 
-API endpoints (`/api/pothole`):
+```
+website/
+├── frontend/     # React + Vite + Tailwind + Leaflet
+└── backend/      # Express API + ai.service.js + ai_server.py + ai_predict.py
+```
 
-- `GET /` — list reports
-- `POST /` — create report (image + coordinates, or video + route)
-- `POST /analyze` — AI analysis only (no save)
-- `POST /live-detect` — analyze a live camera frame + GPS; auto-saves on detection
-- `POST /near` — nearby reports + alerts
+### Important backend files
+
+| File | Role |
+|------|------|
+| `backend/server.js` | Express entry, CORS, routes |
+| `backend/routes/pothole.routes.js` | `/api/pothole` endpoints |
+| `backend/controllers/pothole.controller.js` | Upload, live, list, status |
+| `backend/services/ai.service.js` | Spawns Python; maps confidence → severity |
+| `backend/ai_server.py` | Persistent YOLO for images/live |
+| `backend/ai_predict.py` | One-shot YOLO for videos |
+| `backend/models/pothole.model.js` | MongoDB schema (GeoJSON + 2dsphere) |
+
+### Important frontend pages
+
+| File | Role |
+|------|------|
+| `frontend/src/pages/Report.jsx` | Upload + status polling |
+| `frontend/src/pages/LiveDetect.jsx` | Live camera + overlay |
+| `frontend/src/pages/MapView.jsx` | Map + nearby highlight |
+| `frontend/src/pages/Dashboard.jsx` | Stats |
 
 ---
 
 ## Requirements
 
-- Node.js 18+ (or active LTS)
-- npm or yarn
-- MongoDB (local or cloud)
-- Cloudinary account (optional, required for image uploads)
+- Node.js 18+
+- Python 3 + `backend/requirements.txt` (`ultralytics`, `opencv-python`, `numpy`, `torch`)
+- MongoDB
+- Cloudinary
+- Model weights: `../../ai/runs/detect/train2/weights/best.pt` (from `website/backend`)
 
 ---
 
-## Environment variables
+## Environment
 
-Create `.env` files in each package as needed.
+### `backend/.env`
 
-### Backend (`backend/.env`)
-
-Required:
-
-- `MONGO_DB_URL` — MongoDB connection string (e.g. `mongodb://localhost:27017`)
-- `DB_NAME` — Database name
-- `PORT` — Port for backend server (default: `3000`)
-- `CLOUDINARY_CLOUD_NAME` — Cloudinary cloud name (if using Cloudinary)
-- `CLOUDINARY_API_KEY` — Cloudinary API key
-- `CLOUDINARY_API_SECRET` — Cloudinary API secret
-- `CORS_ORIGIN` — Frontend origin (optional, defaults to http://localhost:5173)
-
-### Frontend (`frontend/.env`)
-
-Required:
-
-- `VITE_API_URL` — `http://localhost:8000`
-
-
-> Note: When using the Geolocation API in the browser, geolocation usually requires HTTPS (except on `localhost`). Run the frontend on `localhost` for development to access GPS features.
-
----
-
-## Setup & local development
-
-Clone the repo and install dependencies for both services.
-
-1. Backend
-
-```bash
-cd backend
-npm install
-# create .env with MONGO_URI etc.
-npm run dev   # or `node server.js` if you prefer
+```env
+MONGO_DB_URL=mongodb://localhost:27017
+DB_NAME=your_db_name
+PORT=8000
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
+CORS_ORIGIN=http://localhost:5173
+PYTHON_EXECUTABLE=python
 ```
 
-- Backend will start on `PORT` (default `3000`) and expose endpoints under `/api/pothole`.
+### `frontend/.env`
 
-2. Frontend
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+---
+
+## Run locally
 
 ```bash
+# Python deps (once)
+cd backend
+python -m pip install -r requirements.txt
+npm install
+npm run dev
+
+# new terminal
 cd frontend
 npm install
-# optional: set VITE_API_URL in `frontend/.env` if not using a Vite proxy
 npm run dev
 ```
 
-- Vite dev server runs by default on `http://localhost:5173`.
-- If you prefer proxying, add the `server.proxy` entry to `vite.config.js`:
-
-```js
-// vite.config.js
-export default defineConfig({
-  // ...
-  server: {
-    proxy: {
-      '/api': 'http://localhost:8000'
-    }
-  }
-})
-```
+- Frontend: http://localhost:5173  
+- Backend: http://localhost:8000  
 
 ---
 
-## API
+## API (`/api/pothole`)
 
-Base: `http://localhost:8000/api/pothole`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | List potholes (optional `lat`, `lng`) |
+| `GET` | `/status/:id` | Poll processing status after upload |
+| `POST` | `/` | Upload image/video → **202** `{ id, status: "processing" }` |
+| `POST` | `/analyze` | AI only |
+| `POST` | `/live-detect` | Live frame + GPS |
+| `POST` | `/near` | Nearby query (backend); map nearby is mainly client-side |
 
-### GET /
+### Image upload FormData
 
-Fetch recent potholes. Query params (optional): `lat`, `lng` (to filter by 20km radius), `radius` for custom distances on `/near` endpoint.
+- `image`
+- `locationDetails` — JSON `[lat, lng]`
+- optional `accuracy`
 
-Response example:
+### Video upload FormData
 
-```json
-{
-  "count": 10,
-  "potholes": [
-    {
-      "_id": "...",
-      "location": { "type": "Point", "coordinates": [lng, lat] },
-      "severity": "high",
-      "confidence": 0.92,
-      "imageURL": "https://...",
-      "createdAt": "2026-01-10T..."
-    }
-  ]
-}
-```
-
-### POST /
-
-Upload pothole report. Form data fields:
-
-- `image` — image file (multipart)
-- `locationDetails` — JSON string of `[latitude, longitude]` (note: backend expects `coordinates: [longitude, latitude]` internally)
-
-Returns 201 with created pothole object on success.
-
-### POST /near
-
-Accepts `lat`, `lng`, and optional `radius` (meters) — returns nearby potholes and alerts
+- `video`
+- `route` — JSON `{ fromName, toName, from:{lat,lng}, to:{lat,lng} }`
 
 ---
 
-## Features
+## AI notes
 
-- Report potholes by uploading image, vedio and strem vedio + location
-- Dashboard with counts by severity
-- Interactive map (Leaflet + OpenStreetMap) with markers for reports
-- User location marker and nearby detection (within 200m flagged)
-- Cloudinary image uploads (optional)
+- Frontend never calls YOLO directly.
+- Images/live → persistent `ai_server.py`
+- Videos → one-shot `ai_predict.py`
+- Severity is computed in **`ai.service.js`** from confidence (≥0.8 high, ≥0.5 medium, else low)
+
+More detail: [`../docs/TECHNICAL_README.md`](../docs/TECHNICAL_README.md)
 
 ---
 
 ## License
 
 MIT
-
